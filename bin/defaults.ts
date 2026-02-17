@@ -16,7 +16,18 @@ export const DEFAULT_PAKE_OPTIONS: PakeCliOptions = {
   userAgent: '',
   showSystemTray: false,
   multiArch: false,
-  targets: 'deb',
+  targets: (() => {
+    switch (process.platform) {
+      case 'linux':
+        return 'deb,appimage';
+      case 'darwin':
+        return 'dmg';
+      case 'win32':
+        return 'msi';
+      default:
+        return 'deb';
+    }
+  })(),
   useLocalFile: false,
   systemTrayIcon: '',
   proxyUrl: '',
@@ -30,12 +41,19 @@ export const DEFAULT_PAKE_OPTIONS: PakeCliOptions = {
   keepBinary: false,
   multiInstance: false,
   startToTray: false,
+  forceInternalNavigation: false,
+  iterativeBuild: false,
+  zoom: 100,
+  minWidth: 0,
+  minHeight: 0,
+  ignoreCertificateErrors: false,
+  newWindow: false,
 };
 
 // Just for cli development
 export const DEFAULT_DEV_PAKE_OPTIONS: PakeCliOptions & { url: string } = {
   ...DEFAULT_PAKE_OPTIONS,
-  url: 'https://weekly.tw93.fun/',
+  url: 'https://weekly.tw93.fun/en',
   name: 'Weekly',
   hideTitleBar: true,
 };

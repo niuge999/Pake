@@ -1,7 +1,7 @@
 {
   "windows": [
     {
-      "url": "https://weekly.tw93.fun/",
+      "url": "https://weekly.tw93.fun/en",
       "url_type": "web",
       "hide_title_bar": true,
       "fullscreen": false,
@@ -17,7 +17,9 @@
       "enable_wasm": false,
       "enable_drag_drop": false,
       "maximize": false,
-      "start_to_tray": false
+      "start_to_tray": false,
+      "force_internal_navigation": false,
+      "new_window": false
     }
   ],
   "user_agent": {

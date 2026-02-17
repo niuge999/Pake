@@ -9,14 +9,26 @@ use tauri_plugin_window_state::StateFlags;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 
+const WINDOW_SHOW_DELAY: u64 = 50;
+
 use app::{
-    invoke::{download_file, download_file_by_binary, send_notification},
+    invoke::{
+        clear_cache_and_restart, download_file, download_file_by_binary, send_notification,
+        update_theme_mode,
+    },
     setup::{set_global_shortcut, set_system_tray},
     window::set_window,
 };
 use util::get_pake_config;
 
 pub fn run_app() {
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var("WEBKIT_DISABLE_DMABUF_RENDERER").is_err() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    }
+
     let (pake_config, tauri_config) = get_pake_config();
     let tauri_app = tauri::Builder::default();
 
@@ -42,7 +54,8 @@ pub fn run_app() {
         .plugin(tauri_plugin_oauth::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_opener::init()); // Add this
 
     // Only add single instance plugin if multiple instances are not allowed
     if !multi_instance {
@@ -60,24 +73,56 @@ pub fn run_app() {
             download_file,
             download_file_by_binary,
             send_notification,
+            update_theme_mode,
+            clear_cache_and_restart,
         ])
         .setup(move |app| {
+            // --- Menu Construction Start ---
+            #[cfg(target_os = "macos")]
+            {
+                let menu = app::menu::get_menu(app.app_handle())?;
+                app.set_menu(menu)?;
+
+                // Event Handling for Custom Menu Item
+                app.on_menu_event(move |app_handle, event| {
+                    app::menu::handle_menu_click(app_handle, event.id().as_ref());
+                });
+            }
+            // --- Menu Construction End ---
+
             let window = set_window(app, &pake_config, &tauri_config);
             set_system_tray(
                 app.app_handle(),
                 show_system_tray,
                 &pake_config.system_tray_path,
+                init_fullscreen,
             )
             .unwrap();
-            set_global_shortcut(app.app_handle(), activation_shortcut).unwrap();
+            set_global_shortcut(app.app_handle(), activation_shortcut, init_fullscreen).unwrap();
 
             // Show window after state restoration to prevent position flashing
             // Unless start_to_tray is enabled, then keep it hidden
             if !start_to_tray {
                 let window_clone = window.clone();
                 tauri::async_runtime::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(WINDOW_SHOW_DELAY)).await;
                     window_clone.show().unwrap();
+
+                    // Fixed: Linux fullscreen issue with virtual keyboard
+                    #[cfg(target_os = "linux")]
+                    {
+                        if init_fullscreen {
+                            window_clone.set_fullscreen(true).unwrap();
+                            // Ensure webview maintains focus for input after fullscreen
+                            let _ = window_clone.set_focus();
+                        } else {
+                            // Fix: Ubuntu 24.04/GNOME window buttons non-functional until resize (#1122)
+                            // The window manager needs time to process the MapWindow event before
+                            // accepting focus requests. Without this, decorations remain non-interactive.
+                            tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
+                            let _ = window_clone.set_focus();
+                        }
+                    }
                 });
             }
 
@@ -96,6 +141,16 @@ pub fn run_app() {
                                 tokio::time::sleep(Duration::from_millis(900)).await;
                             }
                         }
+                        #[cfg(target_os = "linux")]
+                        {
+                            if window.is_fullscreen().unwrap_or(false) {
+                                window.set_fullscreen(false).unwrap();
+                                // Restore focus after exiting fullscreen to fix input issues
+                                let _ = window.set_focus();
+                            }
+                        }
+                        // On macOS, directly hide without minimize to avoid duplicate Dock icons
+                        #[cfg(not(target_os = "macos"))]
                         window.minimize().unwrap();
                         window.hide().unwrap();
                     });
@@ -106,8 +161,24 @@ pub fn run_app() {
                 }
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            // Handle macOS dock icon click to reopen hidden window
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = _event
+            {
+                if !has_visible_windows {
+                    if let Some(window) = _app.get_webview_window("pake") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
+            }
+        });
 }
 
 pub fn run() {

@@ -35,8 +35,8 @@ source ~/.bashrc
 **Prerequisites:**
 
 - Node.js ≥18.0.0
-- Rust ≥1.78.0 (installed automatically if missing)
-- **Windows/Linux**: See [system dependencies guide](advanced-usage.md#prerequisites) for platform-specific requirements
+- Rust ≥1.85.0 (installed automatically if missing)
+- **macOS/Linux**: `curl`, `wget`, `file` and `tar` used for dependency management
 
 ## Quick Start
 
@@ -138,6 +138,32 @@ Set the width of the application window. Default is `1200px`.
 --width <number>
 ```
 
+#### [min-width]
+
+Set the minimum width that the window can be resized to. Keeps layouts usable when the window is dragged small.
+
+```shell
+--min-width <number>
+```
+
+#### [min-height]
+
+Set the minimum height that the window can be resized to. Prevents UI breakage caused by very short windows.
+
+```shell
+--min-height <number>
+```
+
+#### [zoom]
+
+Set initial page zoom level (50-200). Default is `100`. Users can still adjust with `Cmd/Ctrl +/-/0` shortcuts.
+
+```shell
+--zoom <number>
+--zoom 80   # 80%
+--zoom 120  # 120%
+```
+
 #### [hide-title-bar]
 
 Enable or disable immersive header. Default is `false`. Use the following command to enable this feature, macOS only.
@@ -204,6 +230,14 @@ Sets whether to disable web shortcuts in the original Pake container, defaults t
 --disabled-web-shortcuts
 ```
 
+#### [force-internal-navigation]
+
+Keeps every clicked link (even pointing to other domains) inside the Pake window instead of letting the OS open an external browser or helper. Default is `false`.
+
+```shell
+--force-internal-navigation
+```
+
 #### [multi-arch]
 
 Package the application to support both Intel and M1 chips, exclusively for macOS. Default is `false`.
@@ -233,7 +267,7 @@ Package the application to support both Intel and M1 chips, exclusively for macO
 
 Specify the build target architecture or format:
 
-- **Linux**: `deb`, `appimage`, `deb-arm64`, `appimage-arm64` (default: `deb`)
+- **Linux**: `deb`, `appimage`, `rpm`, `deb-arm64`, `appimage-arm64`, `rpm-arm64` (default: `deb`, `appimage`)
 - **Windows**: `x64`, `arm64` (auto-detects if not specified)
 - **macOS**: `intel`, `apple`, `universal` (auto-detects if not specified)
 
@@ -367,6 +401,14 @@ pake https://github.com --name GitHub --keep-binary
 
 **Output**: Creates both installer and standalone executable (`AppName-binary` on Unix, `AppName.exe` on Windows).
 
+#### [iterative-build]
+
+Turn on rapid build mode (app only, no dmg/deb/msi), good for debugging. Default is `false`.
+
+```shell
+--iterative-build
+```
+
 #### [multi-instance]
 
 Allow the packaged app to run more than one instance at the same time. Default is `false`, which means launching a second instance simply focuses the existing window. Enable this when you need to open several windows of the same app simultaneously.
@@ -429,6 +471,22 @@ Enable developer tools and detailed logging for debugging.
 
 ```shell
 --debug
+```
+
+#### [ignore-certificate-errors]
+
+Ignore TLS certificate validation errors when loading the target URL. Useful for intranet apps, dev servers, or self-signed certificates.
+
+```shell
+--ignore-certificate-errors
+```
+
+#### [new-window]
+
+Allow new window for third-party login authorization.
+
+```shell
+--new-window
 ```
 
 ### Packaging Complete

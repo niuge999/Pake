@@ -159,7 +159,7 @@ pake ./my-app/index.html --name my-static-app --use-local-file
 ### 前置条件
 
 - Node.js ≥22.0.0 (推荐 LTS，较旧版本 ≥18.0.0 可能可用)
-- Rust ≥1.89.0 (推荐稳定版，较旧版本 ≥1.78.0 可能可用)
+- Rust ≥1.85.0 (推荐稳定版)
 
 #### 平台特定要求
 
@@ -237,7 +237,7 @@ pnpm run dev
 ```typescript
 export const DEFAULT_DEV_PAKE_OPTIONS: PakeCliOptions & { url: string } = {
   ...DEFAULT_PAKE_OPTIONS,
-  url: "https://weekly.tw93.fun/",
+  url: "https://weekly.tw93.fun/en",
   name: "Weekly",
 };
 ```

@@ -7,7 +7,10 @@ import { PakeAppOptions } from '@/types';
 import { checkRustInstalled, ensureRustEnv, installRust } from '@/helpers/rust';
 import { mergeConfig } from '@/helpers/merge';
 import tauriConfig from '@/helpers/tauriConfig';
-import { generateIdentifierSafeName } from '@/utils/name';
+import {
+  generateIdentifierSafeName,
+  generateLinuxPackageName,
+} from '@/utils/name';
 import { npmDirectory } from '@/utils/dir';
 import { getSpinner } from '@/utils/info';
 import { shellExec } from '@/utils/shell';
@@ -34,7 +37,8 @@ export default abstract class BaseBuilder {
   }
 
   private getInstallTimeout(): number {
-    return process.platform === 'win32' ? 600000 : 300000;
+    // Windows needs more time due to native compilation and antivirus scanning
+    return process.platform === 'win32' ? 900000 : 600000;
   }
 
   private getBuildTimeout(): number {
@@ -100,38 +104,84 @@ export default abstract class BaseBuilder {
     const projectConf = path.join(rustProjectDir, 'config.toml');
     await fsExtra.ensureDir(rustProjectDir);
 
-    // 智能检测可用的包管理器
+    // Detect available package manager
     const packageManager = await this.detectPackageManager();
-    const registryOption = isChina
-      ? ' --registry=https://registry.npmmirror.com'
-      : '';
-    // 根据包管理器类型设置依赖冲突解决选项
+    const registryOption = ' --registry=https://registry.npmmirror.com';
     const peerDepsOption =
       packageManager === 'npm' ? ' --legacy-peer-deps' : '';
 
     const timeout = this.getInstallTimeout();
-
     const buildEnv = this.getBuildEnvironment();
 
-    if (isChina) {
+    // Show helpful message for first-time users
+    if (!tauriTargetPathExists) {
       logger.info(
-        `✺ Located in China, using ${packageManager}/rsProxy CN mirror.`,
-      );
-      const projectCnConf = path.join(tauriSrcPath, 'rust_proxy.toml');
-      await fsExtra.copy(projectCnConf, projectConf);
-      await shellExec(
-        `cd "${npmDirectory}" && ${packageManager} install${registryOption}${peerDepsOption}`,
-        timeout,
-        buildEnv,
-      );
-    } else {
-      await shellExec(
-        `cd "${npmDirectory}" && ${packageManager} install${peerDepsOption}`,
-        timeout,
-        buildEnv,
+        process.platform === 'win32'
+          ? '✺ First-time setup may take 10-15 minutes on Windows (compiling dependencies)...'
+          : '✺ First-time setup may take 5-10 minutes (installing dependencies)...',
       );
     }
-    spinner.succeed(chalk.green('Package installed!'));
+
+    let usedMirror = isChina;
+
+    try {
+      if (isChina) {
+        logger.info(
+          `✺ Located in China, using ${packageManager}/rsProxy CN mirror.`,
+        );
+        const projectCnConf = path.join(tauriSrcPath, 'rust_proxy.toml');
+        await fsExtra.copy(projectCnConf, projectConf);
+        await shellExec(
+          `cd "${npmDirectory}" && ${packageManager} install${registryOption}${peerDepsOption}`,
+          timeout,
+          { ...buildEnv, CI: 'true' },
+        );
+      } else {
+        await shellExec(
+          `cd "${npmDirectory}" && ${packageManager} install${peerDepsOption}`,
+          timeout,
+          { ...buildEnv, CI: 'true' },
+        );
+      }
+      spinner.succeed(chalk.green('Package installed!'));
+    } catch (error: unknown) {
+      // If installation times out and we haven't tried the mirror yet, retry with mirror
+      if (
+        error instanceof Error &&
+        error.message.includes('timed out') &&
+        !usedMirror
+      ) {
+        spinner.fail(
+          chalk.yellow('Installation timed out, retrying with CN mirror...'),
+        );
+        logger.info(
+          '✺ Retrying installation with CN mirror for better speed...',
+        );
+
+        const retrySpinner = getSpinner('Retrying installation...');
+        usedMirror = true;
+
+        try {
+          const projectCnConf = path.join(tauriSrcPath, 'rust_proxy.toml');
+          await fsExtra.copy(projectCnConf, projectConf);
+          await shellExec(
+            `cd "${npmDirectory}" && ${packageManager} install${registryOption}${peerDepsOption}`,
+            timeout,
+            { ...buildEnv, CI: 'true' },
+          );
+          retrySpinner.succeed(
+            chalk.green('Package installed with CN mirror!'),
+          );
+        } catch (retryError) {
+          retrySpinner.fail(chalk.red('Installation failed'));
+          throw retryError;
+        }
+      } else {
+        spinner.fail(chalk.red('Installation failed'));
+        throw error;
+      }
+    }
+
     if (!tauriTargetPathExists) {
       logger.warn(
         '✼ The first packaging may be slow, please be patient and wait, it will be faster afterwards.',
@@ -144,11 +194,29 @@ export default abstract class BaseBuilder {
   }
 
   async start(url: string) {
+    logger.info('Pake dev server starting...');
     await mergeConfig(url, this.options, tauriConfig);
+
+    const packageManager = await this.detectPackageManager();
+    const configPath = path.join(
+      npmDirectory,
+      'src-tauri',
+      '.pake',
+      'tauri.conf.json',
+    );
+
+    const features = this.getBuildFeatures();
+    const featureArgs =
+      features.length > 0 ? `--features ${features.join(',')}` : '';
+
+    const argSeparator = packageManager === 'npm' ? ' --' : '';
+    const command = `cd "${npmDirectory}" && ${packageManager} run tauri${argSeparator} dev --config "${configPath}" ${featureArgs}`;
+
+    await shellExec(command);
   }
 
   async buildAndCopy(url: string, target: string) {
-    const { name } = this.options;
+    const { name = 'pake-app' } = this.options;
     await mergeConfig(url, this.options, tauriConfig);
 
     // Detect available package manager
@@ -174,7 +242,7 @@ export default abstract class BaseBuilder {
     // Warn users about potential AppImage build failures on modern Linux systems.
     // The linuxdeploy tool bundled in Tauri uses an older strip tool that doesn't
     // recognize the .relr.dyn section introduced in glibc 2.38+.
-    if (process.platform === 'linux' && this.options.targets === 'appimage') {
+    if (process.platform === 'linux' && target === 'appimage') {
       if (!buildEnv.NO_STRIP) {
         logger.warn(
           '⚠ Building AppImage on Linux may fail due to strip incompatibility with glibc 2.38+',
@@ -193,7 +261,7 @@ export default abstract class BaseBuilder {
     } catch (error) {
       const shouldRetryWithoutStrip =
         process.platform === 'linux' &&
-        this.options.targets === 'appimage' &&
+        target === 'appimage' &&
         !buildEnv.NO_STRIP &&
         this.isLinuxDeployStripError(error);
 
@@ -472,13 +540,12 @@ export default abstract class BaseBuilder {
   protected getBinaryName(appName: string): string {
     const extension = process.platform === 'win32' ? '.exe' : '';
 
-    // Linux uses the unique binary name we set in merge.ts
-    if (process.platform === 'linux') {
-      return `pake-${generateIdentifierSafeName(appName)}${extension}`;
-    }
-
-    // Windows and macOS use 'pake' as binary name
-    return `pake${extension}`;
+    // Use unique binary name for all platforms to avoid conflicts
+    const nameToUse =
+      process.platform === 'linux'
+        ? generateLinuxPackageName(appName)
+        : generateIdentifierSafeName(appName);
+    return `pake-${nameToUse}${extension}`;
   }
 
   /**

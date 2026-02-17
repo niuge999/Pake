@@ -12,7 +12,19 @@ const shortcuts = {
 
 function setZoom(zoom) {
   const html = document.getElementsByTagName("html")[0];
-  html.style.zoom = zoom;
+  const body = document.body;
+  const zoomValue = parseFloat(zoom) / 100;
+  const isWindows = /windows/i.test(navigator.userAgent);
+
+  if (isWindows) {
+    body.style.transform = `scale(${zoomValue})`;
+    body.style.transformOrigin = "top left";
+    body.style.width = `${100 / zoomValue}%`;
+    body.style.height = `${100 / zoomValue}%`;
+  } else {
+    html.style.zoom = zoom;
+  }
+
   window.localStorage.setItem("htmlZoom", zoom);
 }
 
@@ -29,6 +41,16 @@ function zoomOut() {
   zoomCommon((currentZoom) => `${Math.max(parseInt(currentZoom) - 10, 30)}%`);
 }
 
+let pasteAsPlainTextPending = false;
+
+function triggerPasteAsPlainText() {
+  pasteAsPlainTextPending = true;
+  document.execCommand("paste");
+  setTimeout(() => {
+    pasteAsPlainTextPending = false;
+  }, 100);
+}
+
 function handleShortcut(event) {
   if (shortcuts[event.key]) {
     event.preventDefault();
@@ -36,7 +58,6 @@ function handleShortcut(event) {
   }
 }
 
-// Configuration constants
 const DOWNLOADABLE_FILE_EXTENSIONS = {
   documents: [
     "pdf",
@@ -124,6 +145,34 @@ const ALL_DOWNLOADABLE_EXTENSIONS = Object.values(
   DOWNLOADABLE_FILE_EXTENSIONS,
 ).flat();
 
+const PREVIEWABLE_MEDIA_EXTENSIONS = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "bmp",
+  "tiff",
+  "tif",
+  "avif",
+  "heic",
+  "heif",
+  "mp4",
+  "webm",
+  "mov",
+  "m4v",
+  "mkv",
+  "avi",
+  "ogv",
+  "mp3",
+  "wav",
+  "ogg",
+  "flac",
+  "aac",
+  "m4a",
+];
+
 const DOWNLOAD_PATH_PATTERNS = [
   "/download/",
   "/files/",
@@ -164,24 +213,43 @@ function showDownloadError(filename) {
   }
 }
 
+function getExtension(url) {
+  try {
+    const pathname = new URL(url).pathname.toLowerCase();
+    const extensionIndex = pathname.lastIndexOf(".");
+    return extensionIndex > -1 ? pathname.slice(extensionIndex + 1) : "";
+  } catch (e) {
+    return "";
+  }
+}
+
+function isPreviewableMedia(url) {
+  const extension = getExtension(url);
+  return PREVIEWABLE_MEDIA_EXTENSIONS.includes(extension);
+}
+
 // Unified file detection - replaces both isDownloadLink and isFileLink
 function isDownloadableFile(url) {
   try {
+    const extension = getExtension(url);
+    if (PREVIEWABLE_MEDIA_EXTENSIONS.includes(extension)) {
+      return false;
+    }
+
     const urlObj = new URL(url);
-    const pathname = urlObj.pathname.toLowerCase();
+    const hasDownloadHints =
+      urlObj.searchParams.has("download") ||
+      urlObj.searchParams.has("attachment");
 
-    // Get file extension
-    const extension = pathname.substring(pathname.lastIndexOf(".") + 1);
-
-    const fileExtensions = ALL_DOWNLOADABLE_EXTENSIONS;
+    if (hasDownloadHints) {
+      return true;
+    }
 
     return (
-      fileExtensions.includes(extension) ||
-      // Check for download hints
-      urlObj.searchParams.has("download") ||
-      urlObj.searchParams.has("attachment") ||
-      // Check for common download paths
-      DOWNLOAD_PATH_PATTERNS.some((pattern) => pathname.includes(pattern))
+      ALL_DOWNLOADABLE_EXTENSIONS.includes(extension) ||
+      DOWNLOAD_PATH_PATTERNS.some((pattern) =>
+        urlObj.pathname.toLowerCase().includes(pattern),
+      )
     );
   } catch (e) {
     return false;
@@ -192,6 +260,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const tauri = window.__TAURI__;
   const appWindow = tauri.window.getCurrentWindow();
   const invoke = tauri.core.invoke;
+  const pakeConfig = window["pakeConfig"] || {};
+  const forceInternalNavigation = pakeConfig.force_internal_navigation === true;
 
   if (!document.getElementById("pake-top-dom")) {
     const topDom = document.createElement("div");
@@ -228,6 +298,22 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   }
+
+  document.addEventListener(
+    "paste",
+    (event) => {
+      if (pasteAsPlainTextPending) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        const text = event.clipboardData?.getData("text/plain") || "";
+        if (text) {
+          document.execCommand("insertText", false, text);
+        }
+      }
+    },
+    true,
+  );
 
   // Collect blob urls to blob by overriding window.URL.createObjectURL
   function collectUrlToBlobs() {
@@ -319,9 +405,13 @@ document.addEventListener("DOMContentLoaded", () => {
           const url = anchorEle.href;
           const filename = anchorEle.download || getFilenameFromUrl(url);
           if (window.blobToUrlCaches.has(url)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
             downloadFromBlobUrl(url, filename);
             // case: download from dataURL -> convert dataURL ->
           } else if (url.startsWith("data:")) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
             downloadFromDataUri(url, filename);
           }
         },
@@ -388,11 +478,23 @@ document.addEventListener("DOMContentLoaded", () => {
       const absoluteUrl = hrefUrl.href;
       let filename = anchorElement.download || getFilenameFromUrl(absoluteUrl);
 
+      // Early check: Allow OAuth/authentication links to navigate naturally
+      if (window.isAuthLink(absoluteUrl)) {
+        console.log("[Pake] Allowing OAuth navigation to:", absoluteUrl);
+        return;
+      }
+
       // Handle _blank links: same domain navigates in-app, cross-domain opens new window
       if (target === "_blank") {
+        if (forceInternalNavigation) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.location.href = absoluteUrl;
+          return;
+        }
+
         if (isSameDomain(absoluteUrl)) {
-          // For same-domain links, let the browser/SPA handle it naturally
-          // This prevents full page reload in SPA apps like Discord
+          // For same-domain links, let the browser handle it naturally
           return;
         }
 
@@ -409,6 +511,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       if (target === "_new") {
+        if (forceInternalNavigation) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          window.location.href = absoluteUrl;
+          return;
+        }
+
         e.preventDefault();
         handleExternalLink(absoluteUrl);
         return;
@@ -430,7 +539,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Handle regular links: same domain allows normal navigation, cross-domain opens new window
       if (!target || target === "_self") {
+        // Optimization: Allow previewable media to be handled by the app/browser directly
+        // This fixes issues where CDN links are treated as external
+        if (isPreviewableMedia(absoluteUrl)) {
+          return;
+        }
+
         if (!isSameDomain(absoluteUrl)) {
+          if (forceInternalNavigation) {
+            return;
+          }
+
           e.preventDefault();
           e.stopImmediatePropagation();
           const newWindow = originalWindowOpen.call(
@@ -454,7 +573,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // Rewrite the window.open function.
   const originalWindowOpen = window.open;
   window.open = function (url, name, specs) {
-    if (name === "AppleAuthentication") {
+    // Allow authentication popups to open normally
+    if (window.isAuthPopup(url, name)) {
       return originalWindowOpen.call(window, url, name, specs);
     }
 
@@ -464,6 +584,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const absoluteUrl = hrefUrl.href;
 
       if (!isSameDomain(absoluteUrl)) {
+        if (forceInternalNavigation) {
+          return originalWindowOpen.call(window, absoluteUrl, name, specs);
+        }
+
         handleExternalLink(absoluteUrl);
         return null;
       }
@@ -869,6 +993,8 @@ function setDefaultZoom() {
   const htmlZoom = window.localStorage.getItem("htmlZoom");
   if (htmlZoom) {
     setZoom(htmlZoom);
+  } else if (window.pakeConfig?.zoom && window.pakeConfig.zoom !== 100) {
+    setZoom(`${window.pakeConfig.zoom}%`);
   }
 }
 

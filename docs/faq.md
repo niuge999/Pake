@@ -4,7 +4,101 @@
 
 Common issues and solutions when using Pake.
 
+## Table of Contents
+
+- [Build Issues](#build-issues)
+  - [Rust Version Error: "feature 'edition2024' is required"](#rust-version-error-feature-edition2024-is-required)
+  - [Linux: Build Error "Can't detect any appindicator library" on Ubuntu 24.04](#linux-build-error-cant-detect-any-appindicator-library-on-ubuntu-2404)
+  - [Linux: AppImage Build Fails with "failed to run linuxdeploy"](#linux-appimage-build-fails-with-failed-to-run-linuxdeploy)
+  - [Linux: "cargo: command not found" After Installing Rust](#linux-cargo-command-not-found-after-installing-rust)
+  - [Windows: Installation Timeout During First Build](#windows-installation-timeout-during-first-build)
+  - [Windows: Missing Visual Studio Build Tools](#windows-missing-visual-studio-build-tools)
+  - [macOS: Build Fails with Module Compilation Errors](#macos-build-fails-with-module-compilation-errors)
+- [Runtime Issues](#runtime-issues)
+  - [App Window is Too Small/Large](#app-window-is-too-smalllarge)
+  - [App Icon Not Showing Correctly](#app-icon-not-showing-correctly)
+  - [Website Features Not Working (Login, Upload, etc.)](#website-features-not-working-login-upload-etc)
+- [Installation Issues](#installation-issues)
+  - [Permission Denied When Installing Globally](#permission-denied-when-installing-globally)
+- [Getting Help](#getting-help)
+
+---
+
 ## Build Issues
+
+### Rust Version Error: "feature 'edition2024' is required"
+
+**Problem:**
+When building Pake or using the CLI, you encounter an error like:
+
+```txt
+error: failed to parse manifest
+Caused by:
+  feature `edition2024` is required
+  this Cargo does not support nightly features, but if you switch to nightly channel you can add `cargo-features = ["edition2024"]
+  to enable this feature
+```
+
+**Why This Happens:**
+
+Pake's dependencies require Rust edition2024 support, which is only available in Rust 1.85.0 or later. Specifically:
+
+- The dependency chain includes: `tauri` → `image` → `moxcms` → `pxfm v0.1.25` (requires edition2024)
+- Rust edition2024 became stable in Rust 1.85.0 (released February 2025)
+- If your Rust version is older (e.g., 1.82.0 from August 2024), you'll see this error
+
+**Solution:**
+
+Update your Rust toolchain to version 1.85.0 or later:
+
+```bash
+# Update to the latest stable Rust version
+rustup update stable
+
+# Or install the latest stable version
+rustup install stable
+
+# Verify the update
+rustc --version
+# Should show: rustc 1.85.0 or higher
+```
+
+After updating, retry your build command.
+
+**For Development Setup:**
+
+If you're setting up a development environment, ensure:
+
+- Rust ≥1.85.0 (check with `rustc --version`)
+- Node.js ≥22.0.0 (check with `node --version`)
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for complete prerequisites.
+
+---
+
+### Linux: Build Error "Can't detect any appindicator library" on Ubuntu 24.04
+
+**Problem:**
+When building on Ubuntu 24.04 or newer, you may encounter:
+
+```txt
+Can't detect any appindicator library
+```
+
+Or potentially errors related to Icon RGBA in older versions.
+
+**Solution:**
+
+Ubuntu 24.04+ replaced `libappindicator3-dev` with `libayatana-appindicator3-dev`.
+
+Install the correct dependency:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y libayatana-appindicator3-dev
+```
+
+---
 
 ### Linux: AppImage Build Fails with "failed to run linuxdeploy"
 
@@ -107,6 +201,71 @@ Then try building again.
 
 ---
 
+### Windows: Installation Timeout During First Build
+
+**Problem:**
+When building for the first time on Windows, you may encounter:
+
+```txt
+Error: Command timed out after 900000ms: "cd ... && pnpm install"
+```
+
+**Why This Happens:**
+
+First-time installation on Windows can be slow due to:
+
+- Native module compilation (requires Visual Studio Build Tools)
+- Large dependency downloads (Tauri, Rust toolchain)
+- Windows Defender real-time scanning
+- Network connectivity issues
+
+**Solution 1: Automatic Retry (Built-in)**
+
+Pake CLI now automatically retries with CN mirror if the initial installation times out. Simply wait for the retry to complete.
+
+**Solution 2: Manual Installation**
+
+If automatic retry fails, manually install dependencies:
+
+```bash
+# Navigate to pake-cli installation directory
+cd %LOCALAPPDATA%\pnpm\global\5\.pnpm\pake-cli@VERSION\node_modules\pake-cli
+
+# Install with CN mirror
+pnpm install --registry=https://registry.npmmirror.com
+
+# Then retry your build
+pake https://github.com --name GitHub
+```
+
+**Solution 3: Improve Network Speed**
+
+- Use a stable network connection
+- Temporarily disable antivirus software during installation
+- Use a VPN or proxy if needed
+
+**Expected Time:**
+
+- First installation: 10-15 minutes on Windows
+- Subsequent builds: Much faster (dependencies cached)
+
+---
+
+### Windows: Missing Visual Studio Build Tools
+
+**Problem:**
+Build fails with errors about missing MSVC or Windows SDK.
+
+**Solution:**
+
+Install Visual Studio Build Tools:
+
+1. Download [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+2. During installation, select "Desktop development with C++"
+3. For ARM64 support: Also select "MSVC v143 - VS 2022 C++ ARM64 build tools" under Individual Components
+
+---
+
 ### macOS: Build Fails with Module Compilation Errors
 
 **Problem:**
@@ -125,21 +284,6 @@ EOF
 ```
 
 This file is already in `.gitignore` and won't be committed.
-
----
-
-### Windows: Missing Visual Studio Build Tools
-
-**Problem:**
-Build fails with errors about missing MSVC or Windows SDK.
-
-**Solution:**
-
-Install Visual Studio Build Tools:
-
-1. Download [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-2. During installation, select "Desktop development with C++"
-3. For ARM64 support: Also select "MSVC v143 - VS 2022 C++ ARM64 build tools" under Individual Components
 
 ---
 
